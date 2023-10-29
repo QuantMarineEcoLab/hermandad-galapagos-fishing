@@ -1,0 +1,953 @@
+---
+editor_options:
+  chunk_output_type: console
+output:
+  pdf_document:
+    citation_package: natbib
+    keep_tex: yes
+  fig_caption: yes
+  html_document:
+    df_print: paged
+number_sections: no
+bibliography: [White.bib, packages.bib]
+header-includes: \usepackage{float} \usepackage{setspace}\doublespacing \usepackage[round]{natbib} \usepackage{amsmath} \bibpunct[; ]{(}{)}{,}{a}{}{,} \usepackage{lineno}
+---
+
+
+
+\begin{center}
+        
+\textbf{\Large Industrial fishing compliance with a new marine corridor near the Galapagos Islands}
+        
+
+$\text{*}$ Corresponding author: Easton R. White (Easton.White@unh.edu)
+\end{center}
+
+\vspace{3 mm}
+
+
+This document includes various calculations, figures, and analyses used to study industrial fishing around the Galapagos Marine Reserve.
+
+\tableofcontents
+
+```{r load_packages,echo=F,warning=F,message=F}
+if (!require("pacman",character.only = TRUE))
+  {
+    install.packages("pacman",dep=TRUE)
+    if(!require("pacman",character.only = TRUE)) stop("Package not found")
+  }
+
+pacman::p_load(patchwork, dplyr, tidyr, ggplot2,stringr,knitr,tidyquant,ggpubr, forcats, viridis, sf)
+
+# Default chunk behavior
+knitr::opts_chunk$set(echo = FALSE,warning = FALSE, message = FALSE, tidy.opts=list(width.cutoff=60),tidy=TRUE, cache = TRUE, dev = c('pdf','png'), dpi=300)
+
+theme_cdf <- function(){
+  theme_classic() + theme(panel.border = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),axis.text=element_text(size=8),
+        axis.title=element_text(size=14)) 
+}
+
+```
+
+
+
+
+#pagebreak
+
+# Figures 
+
+```{r, echo=FALSE, out.width='100%', fig.cap='Study area showing the Hermandad Marine Reserve (red contour), with no-take areas (red) and no-longline areas (light orange); the Galapagos Marine Reserve (blue contour), where no industrial fishing nor longline are allowed; and the insular EEZ (I-EEZ) with a black contour. \\label{fig:etp_map}'}
+knitr::include_graphics('I-EEZ-HMR-GMR_edited.png')
+```
+
+\pagebreak
+
+
+```{r,fig.cap='Total monthly industrial fishing effort (hours) in the Ecuadorian Insular Exclusive Economic Zone (I-EEZ) for different gear types for the Ecuadorian (ECU) versus all foreign fleets. The vertical dashed line indicates the announcement of the new Hermandad Reserve (which is 10% of the entire I-EEZ by size). \\label{fig:eez_by_flag_Gear.Type}'}
+
+# Figure 2
+
+combined <- read.csv(file = 'gfw_etp_data/ecuador_galapagos_vessel_id_large_vessels.csv',header=TRUE)
+
+# combined <- combined %>%
+#   mutate(Gear.Type = fct_collapse(Gear.Type,
+#     "Longlines" = c("drifting_longlines","set_longlines"),
+#     "Seines" = c("other_purse_seines","purse_seines","tuna_purse_seines"),
+#     "Pole and line" = "pole_and_line",
+#     other_level = "Other fishing"
+#   ))
+
+combined_by_year <- combined %>%
+  mutate(flag = fct_collapse(Flag, ECU='ECU', other_level = 'Foreign')) %>%
+  filter(!is.na(flag)) %>%
+  mutate(Time.Range = str_sub(Time.Range,end=-4)) %>%
+  mutate(Time.Range = as.Date(paste(Time.Range,'-1',sep=''))) %>%
+  group_by(Time.Range,Gear.Type,flag) %>%
+  summarize(total_fishing =sum(Apparent.Fishing.Hours)) %>% 
+  ungroup() %>%
+  complete(Time.Range, Gear.Type,flag, fill=list(total_fishing=0)) %>%
+  filter(Gear.Type != 'fishing')
+
+ggplot(data=combined_by_year,aes(x=Time.Range, y=total_fishing, color=Gear.Type, linetype=Gear.Type)) + geom_line()   + ylab('Total fishing hours') + xlab('Time') +  facet_wrap(~flag)+
+  scale_color_viridis(discrete = T,begin = 0.2,end=0.8)+ geom_vline(xintercept=as.Date('2022-01-15'),lty=2) + theme_cdf() + ylim(0,2200) + ggtitle( 'Entire I-EEZ') 
+```
+
+
+\pagebreak
+
+
+```{r,fig.cap='Total industrial fishing effort in the Ecuadorian Insular Exclusive Economic Zone (I-EEZ) over time. Non-colored cells indicate no recorded fishing activity. \\label{fig:eez_map}'}
+
+# Figure 3
+
+combined <- read.csv(file = 'gfw_etp_data/ecuador_galapagos_vessel_id_large_vessels.csv',header=TRUE)
+
+
+combined <- combined %>%
+  tidyr::separate(Time.Range,c('Year','Month','Day'),sep="-", convert = TRUE) %>%
+  group_by(Lat,Lon,Year) %>%
+  summarize(Apparent.Fishing.Hours = sum(Apparent.Fishing.Hours))
+
+library(ggmap)
+ myMap <- get_stamenmap(bbox = c(left = min(combined$Lon),
+                                bottom = min(combined$Lat),
+                                right = max(combined$Lon),
+                               top = max(combined$Lat)),
+                      maptype = "terrain", 
+                     crop = FALSE,
+                      zoom = 6)
+
+gal <- ggplot() + labs(x = "", y = "") + coord_cartesian() + coord_fixed() + 
+  stat_summary_2d(data = combined, aes(x = Lon, y = Lat, 
+                                       z = Apparent.Fishing.Hours), fun = sum, alpha = 1,bins = 50) +
+  scale_fill_viridis(name = 'Fishing hours') 
+
+
+
+# Add shapefile
+
+library(sf)
+shpData <- st_read(dsn="shp/GMR.shp",quiet = TRUE)
+#proj4string(shpData) # describes data’s current coordinate reference system
+# to change to correct projection:
+shpData <- st_transform(shpData,
+                       st_crs("+proj=longlat +datum=WGS84"),quiet = TRUE)
+
+shpData2 <- st_read(dsn="shp/HMR_notake.shp",quiet = TRUE)
+shpData2 <- st_transform(shpData2,
+                         st_crs("+proj=longlat +datum=WGS84"),quiet = TRUE)
+
+shpData3 <- st_read(dsn="shp/HMR_nolongline.shp",quiet = TRUE)
+shpData3 <- st_transform(shpData3,
+                         st_crs("+proj=longlat +datum=WGS84"),quiet = TRUE)
+
+shpData4 <- st_read(dsn="shp/ZEE_GALAPAGOS.shp",quiet = TRUE)
+shpData4 <- st_transform(shpData4,
+                         st_crs("+proj=longlat +datum=WGS84"),quiet = TRUE)
+
+
+#facet_grid(Gear.Type~Year)
+gal+facet_wrap(~Year)+theme_cdf()+
+  geom_sf(data = shpData4, color='black',linewidth=0.3, alpha=0.1) +
+  geom_sf(data = shpData2, color =rgb(255,0,0,255, maxColorValue = 365),fill=alpha(rgb(255,0,0,255,maxColorValue = 365),0.2), linewidth=0.5) +
+  geom_sf(data = shpData3, color=rgb(255,0,0,255, maxColorValue = 365), fill = alpha(rgb(255,235,190,255,maxColorValue = 365),0.2),linewidth=0.5) +
+  geom_sf(data = shpData,linewidth=0.3, fill = alpha(rgb(115,223,255,255,maxColorValue = 365),0.3)) +
+  theme(legend.position = 'top') + theme(axis.text=element_text(size=6))
+  
+
+```
+
+\pagebreak
+
+```{r,eval=F,fig.cap='OLD: Total monthly industrial fishing effort (hours) in the area of the Hermandad Marine Reserve for different gear types. The vertical dashed line indicates the announcement of the new Hermandad Reserve.\\label{fig:hermandad_by_flag_Gear.Type}', fig.width = 8}
+
+# Figure 4
+
+combined <- read.csv(file = 'gfw_etp_data/hermandad_vessel_id_large_vessels.csv',header=TRUE)
+
+require(tidyverse)
+combined_by_year <- combined %>%
+  mutate(flag = fct_collapse(Flag, ECU='ECU', other_level = 'Foreign')) %>%
+  mutate(Time.Range = str_sub(Time.Range,end=-4)) %>%
+  mutate(Time.Range = as.Date(paste(Time.Range,'-1',sep=''))) %>%
+  mutate(Gear.Type = fct_recode(Gear.Type, longlines = 'drifting_longlines', "purse seines" = 'tuna_purse_seines')) %>%
+  group_by(Time.Range,Gear.Type) %>%
+  summarize(total_fishing =sum(Apparent.Fishing.Hours)) %>% 
+  ungroup() %>%
+  complete(Time.Range, Gear.Type, fill=list(total_fishing=0)) %>%
+  filter(Gear.Type != 'fishing')
+
+require(ggplot2)
+ggplot(data=combined_by_year,aes(x=Time.Range, y=total_fishing)) + geom_line()   + ylab('Total fishing hours') +
+  scale_color_viridis(discrete = T,begin = 0.2,end=0.8)+ theme_cdf() + geom_vline(xintercept=as.Date('2022-01-15'), linetype=2) +facet_wrap(~Gear.Type, scales = 'free_y') 
+```
+
+```{r,fig.cap='Total monthly industrial fishing effort (hours) in the area of the Hermandad Marine Reserve for different gear types. The vertical dashed line indicates the announcement of the new Hermandad Reserve. The fitted curves are based on pre-closure fishing history with one standard deviation around the mean prediction.\\label{fig:hermandad_by_flag_Gear.Type}', fig.width = 8}
+
+
+
+# New figure 4 with projections
+# Figure 4
+
+combined <- read.csv(file = 'gfw_etp_data/hermandad_vessel_id_large_vessels.csv',header=TRUE)
+
+require(tidyverse)
+combined_by_year <- combined %>%
+  mutate(flag = fct_collapse(Flag, ECU='ECU', other_level = 'Foreign')) %>%
+  mutate(Time.Range = str_sub(Time.Range,end=-4)) %>%
+  mutate(Time.Range = as.Date(paste(Time.Range,'-1',sep=''))) %>%
+  mutate(Gear.Type = fct_recode(Gear.Type, longlines = 'drifting_longlines', "purse seines" = 'tuna_purse_seines')) %>%
+  group_by(Time.Range,Gear.Type) %>%
+  summarize(total_fishing =sum(Apparent.Fishing.Hours)) %>% 
+  ungroup() %>%
+  complete(Time.Range, Gear.Type, fill=list(total_fishing=0)) %>%
+  filter(Gear.Type != 'fishing')
+
+
+
+# Drifting longlines
+df <- combined_by_year %>% filter(Gear.Type=='longlines')
+
+df$month <- as.numeric(format(as.Date(df$Time.Range), '%m'))
+df$year <- as.numeric(format(as.Date(df$Time.Range), '%Y'))
+df$sin <- sin(2*pi*df$month/12)
+df$cos <- cos(2*pi*df$month/12)
+df <- filter(df, year>2019)
+
+df$pre_closure <- 0
+df$pre_closure[df$Time.Range<as.Date('2022-02-01')] <- 1
+df$post_closure<- 0
+df$post_closure[df$Time.Range>as.Date('2022-02-01')] <- 1
+
+require(nlme)
+#model.a = gls(total_fishing ~  sin + cos + year, data = df %>% filter(year<2022),method="ML")
+model.a = glm(total_fishing ~  sin + cos + year, data = df %>% filter(year<2022) %>% mutate(total_fishing=round(total_fishing)),family = 'poisson')
+
+require(AICcmodavg )
+df<-df %>% mutate(
+  model.a.predictions = predictSE.gls(model.a, df, se.fit=T)$fit,
+  model.a.se = predictSE.gls(model.a, df, se.fit=T)$se
+)
+
+
+
+
+# Purse seines
+df2 <- combined_by_year %>% filter(Gear.Type=='purse seines')
+
+df2$month <- as.numeric(format(as.Date(df2$Time.Range), '%m'))
+df2$year <- as.numeric(format(as.Date(df2$Time.Range), '%Y'))
+df2$sin <- sin(2*pi*df2$month/12)
+df2$cos <- cos(2*pi*df2$month/12)
+df2 <- filter(df2, year>2019)
+
+df2$pre_closure <- 0
+df2$pre_closure[df2$Time.Range<as.Date('2022-02-01')] <- 1
+df2$post_closure<- 0
+df2$post_closure[df2$Time.Range>as.Date('2022-02-01')] <- 1
+
+require(nlme)
+#model.a = gls(total_fishing ~  sin + cos + year, data = df2 %>% filter(year<2022),method="ML")
+model.a = glm(total_fishing ~  sin + cos + year, data = df2 %>% filter(year<2022) %>% mutate(total_fishing=round(total_fishing)),family = 'poisson')
+
+require(AICcmodavg )
+df2<-df2 %>% mutate(
+  model.a.predictions = predictSE.gls(model.a, df2, se.fit=T)$fit,
+  model.a.se = predictSE.gls(model.a, df2, se.fit=T)$se
+)
+
+
+
+df_combined <- rbind(df,df2)
+
+
+
+
+#require(ggplot2)
+ggplot(data=df_combined,aes(x=Time.Range, y=total_fishing)) + geom_line() + geom_ribbon(aes(ymin = exp(model.a.predictions - 0.99*exp(model.a.se)), ymax = exp(model.a.predictions + 0.99*exp(model.a.se))), fill = "lightgrey",alpha=0.5)+
+  geom_line(aes(Time.Range,exp(model.a.predictions)),color="grey",lty=2) + ylab('Total fishing hours') +xlab('Time')+ ggtitle( 'Hermandad Marine Reserve') +
+  scale_color_viridis(discrete = T,begin = 0.2,end=0.8)+ theme_cdf() + geom_vline(xintercept=as.Date('2022-01-15'), linetype=2) +facet_wrap(~Gear.Type, scales = 'free_y') + theme_cdf() 
+
+
+```
+
+\pagebreak
+
+```{r, fig.height=4,fig.cap='Total yearly industrial fishing effort (hours) in the area of the Hermandad Marine Reserve for different gear types. The reserve was announced at the start of 2022. \\label{fig:hermandad_map}',eval=T}
+
+# Figure 5
+
+combined <- read.csv(file = 'gfw_etp_data/hermandad_vessel_id_large_vessels.csv',header=TRUE)
+
+combined <- combined %>%
+  tidyr::separate(Time.Range,c('Year','Month','Day'),sep="-", convert = TRUE) %>%
+  filter(Year >2019) %>%
+  filter(Gear.Type != "fishing") %>%
+  mutate(Gear.Type = fct_recode(Gear.Type, longlines = 'drifting_longlines', "purse seines" = 'tuna_purse_seines')) %>%
+  group_by(Lat,Lon,Year,Gear.Type) %>%
+  summarize(Apparent.Fishing.Hours = sum(Apparent.Fishing.Hours))
+
+# create a map with a point location for boulder.
+gal <- ggplot() + labs(x = "", y = "") + coord_cartesian() + coord_fixed() + 
+  stat_summary_2d(data = combined, aes(x = Lon, y = Lat, 
+                                       z = Apparent.Fishing.Hours), fun = sum, alpha = 1,bins = 25) +
+  scale_fill_viridis(name = 'Fishing hours') 
+
+
+
+# Add shapefile
+
+library(sf)
+shpData <- st_read(dsn="shp/GMR.shp",quiet = TRUE)
+#proj4string(shpData) # describes data’s current coordinate reference system
+# to change to correct projection:
+shpData <- st_transform(shpData,
+                       st_crs("+proj=longlat +datum=WGS84"),quiet = TRUE)
+
+shpData2 <- st_read(dsn="shp/HMR_notake.shp",quiet = TRUE)
+shpData2 <- st_transform(shpData2,
+                         st_crs("+proj=longlat +datum=WGS84"),quiet = TRUE)
+
+shpData3 <- st_read(dsn="shp/HMR_nolongline.shp",quiet = TRUE)
+shpData3 <- st_transform(shpData3,
+                         st_crs("+proj=longlat +datum=WGS84"),quiet = TRUE)
+
+shpData4 <- st_read(dsn="shp/ZEE_GALAPAGOS.shp",quiet = TRUE)
+shpData4 <- st_transform(shpData4,
+                         st_crs("+proj=longlat +datum=WGS84"),quiet = TRUE)
+
+
+#facet_grid(Gear.Type~Year)
+gal+facet_grid(Gear.Type~Year)+theme_cdf()+
+  geom_sf(data = shpData4, color='black',linewidth=0.3, alpha=0.1) +
+  geom_sf(data = shpData2, color =rgb(255,0,0,255, maxColorValue = 365),fill=alpha(rgb(255,0,0,255,maxColorValue = 365),0.2), linewidth=0.5) +
+  geom_sf(data = shpData3, color=rgb(255,0,0,255, maxColorValue = 365), fill = alpha(rgb(255,235,190,255,maxColorValue = 365),0.2),linewidth=0.5) +
+  geom_sf(data = shpData,linewidth=0.3, fill = alpha(rgb(115,223,255,255,maxColorValue = 365),0.3)) +
+  theme(legend.position = 'top') + theme(axis.text=element_text(size=6))
+
+
+```
+
+
+
+\pagebreak
+
+```{r}
+combined <- read.csv(file = 'gfw_etp_data/ecuador_galapagos_vessel_id_large_vessels.csv')
+
+vessels <- combined %>%
+  group_by(Vessel.ID) %>%
+  slice(1)
+
+ecu <- combined %>%
+  group_by(flag,Gear.Type) %>%
+  summarize(total_effort = sum(Apparent.Fishing.Hours))
+
+total_ecu <- sum(ecu$total_effort[which(ecu$flag=='ECU' & ecu$Gear.Type %in% c('drifting_longlines', 'tuna_purse_seines'))])/sum(ecu$total_effort)
+
+#vessels <- read.csv(file = 'gfw_etp_data/ecuador_galapagos_vessel_id.csv',header=T)
+gal_MR <- read.csv(file = 'gfw_etp_data/gmr_vessel_id_large_vessels.csv',header=TRUE)
+options(scipen=999)
+
+
+# Hermandad
+hermandad <- read.csv(file = 'gfw_etp_data/hermandad_vessel_id_large_vessels.csv',header=TRUE)
+
+hermandad_by_year <- hermandad %>%
+  mutate(flag = fct_collapse(Flag, ECU='ECU', other_level = 'Foreign')) %>%
+  tidyr::separate(Time.Range,c('Year','Month','Day'),sep="-", convert = TRUE) %>%
+  group_by(Year) %>%
+  summarize(total_fishing =sum(Apparent.Fishing.Hours))
+
+100*(1- hermandad_by_year$total_fishing[hermandad_by_year$Year==2022]/hermandad_by_year$total_fishing[hermandad_by_year$Year==2021])
+
+```
+
+# Abstract
+
+- From 2019-2023, we identified `r length(table(combined$Vessel.ID))` large, industrial (non-artisinal) fishing vessels (`r mean(vessels$tonnage_gt)` tons on average or `r mean(vessels$length_m,na.rm=T)` meters) from `r length(table(combined$Flag))` countries fishing within Insular Exclusive Economic Zone of Ecuador (I-EEZ) around the Galapagos Islands. 
+- In this time window, we observed `r formatC(round(sum(combined$Apparent.Fishing.Hours)), format="d", big.mark=",")` hours of fishing within the EEZ and `r  round(100*sum(gal_MR$Apparent.Fishing.Hours)/sum(combined$Apparent.Fishing.Hours))`% of these fishing hours were within the Galapagos Marine Reserve. - However, `r sum(ecu$total_effort[which(ecu$flag=='ECU' & ecu$Gear.Type %in% c('drifting_longlines', 'tuna_purse_seines'))])/sum(ecu$total_effort)`` of the fishing effort was accounted for by Ecuadorian vessels using tuna purse seines and drifting longlines in equal proportions, while the effort of foreign vessels was accounted for by tuna purse seines.
+- In addition, we studied the effect of a 2022 ruling to close 60,000 square kilometers of fishing area, known as the Hermandad Marine Reserve. We documented a `r 100*(1- hermandad_by_year$total_fishing[hermandad_by_year$Year==2022]/hermandad_by_year$total_fishing[hermandad_by_year$Year==2021])`% decrease in fishing effort within the Hermandad protected area after its implementation. There did not appear to be an increase in effort leading up to the reserve's implementation nor a shift in fishing effort distribution elsewhere after.  
+
+
+
+# Results
+
+
+
+```{r}
+combined <- read.csv(file = 'gfw_etp_data/ecuador_galapagos_vessel_id_large_vessels.csv',header=TRUE)
+#vessels <- read.csv(file = 'gfw_etp_data/ecuador_galapagos_vessel_id.csv',header=T)
+gal_MR <- read.csv(file = 'gfw_etp_data/gmr_vessel_id_large_vessels.csv',header=TRUE)
+options(scipen=999)
+
+combined_by_flag <- combined %>%
+  group_by(Flag) %>%
+  summarize(Apparent.Fishing.Hours=sum(Apparent.Fishing.Hours)) %>%
+  na.omit()
+
+combined_by_gear <- combined %>%
+  #filter(Flag!='ECU') %>%
+  group_by(Gear.Type) %>%
+  summarize(Apparent.Fishing.Hours=sum(Apparent.Fishing.Hours)) %>%
+  mutate(Apparent.Fishing.Hours=100*Apparent.Fishing.Hours/sum(Apparent.Fishing.Hours)) %>%
+  na.omit()
+
+gal_MR_by_gear <- gal_MR %>%
+  group_by(Gear.Type) %>%
+  summarize(Apparent.Fishing.Hours=sum(Apparent.Fishing.Hours)) %>%
+  mutate(Apparent.Fishing.Hours=100*Apparent.Fishing.Hours/sum(Apparent.Fishing.Hours)) %>%
+  na.omit()
+
+combined_by_month <- combined %>%
+  mutate(Month = as.numeric(format(as.Date(Time.Range,format='%Y-%m-%d'),'%m'))) %>%
+  group_by(Month) %>%
+  summarize(Apparent.Fishing.Hours=sum(Apparent.Fishing.Hours)) %>%
+  mutate(Apparent.Fishing.Hours=100*Apparent.Fishing.Hours/sum(Apparent.Fishing.Hours)) %>%
+  na.omit()
+```
+
+Across the entire Ecuadorian Insular Exclusive Economic Zone (I-EEZ) around the Galapagos Island, we documented `r formatC(round(sum(combined$Apparent.Fishing.Hours)), format="d", big.mark=",")` hours of fishing by `r length(table(combined$Vessel.ID))` unique vessels between 2019 and 2022 (Figs. \ref{fig:eez_by_flag_Gear.Type},\ref{fig:eez_map}). 
+
+Ecuador accounted for `r round(100*combined_by_flag$Apparent.Fishing.Hours[combined_by_flag$Flag=='ECU']/sum(combined_by_flag$Apparent.Fishing.Hours),2)`% of this fishing, but we also detected fishing (in decreasing order) by vessels from Panama, Nicaragua, Venezuela, Great Britain, The United States, and Colombia. Approximately, `r  round(100*sum(gal_MR$Apparent.Fishing.Hours)/sum(combined$Apparent.Fishing.Hours))`% of these fishing hours were within the Galapagos Marine Reserve, almost exclusively by Ecuadorian vessels (). The majority (`r round(gal_MR_by_gear$Apparent.Fishing.Hours[gal_MR_by_gear$Gear.Type=='fishing'],2)`%) of fishing effort could not be assigned to a more specific type of fishing mode, highlighting the difficulty of working with smaller vessels in the region. However, for trips that could be assigned to a more specific fishing mode, longlining (`r round(gal_MR_by_gear$Apparent.Fishing.Hours[gal_MR_by_gear$Gear.Type=='set_longlines'],2)`%), pole and line (`r round(gal_MR_by_gear$Apparent.Fishing.Hours[gal_MR_by_gear$Gear.Type=='pole_and_line'],2)`%) and purse seines (`r round(sum(gal_MR_by_gear$Apparent.Fishing.Hours[gal_MR_by_gear$Gear.Type %in% c('other_purse_seines','purse_seines','tuna_purse_seines')]),2)`%) were the most common. These patterns were similar across the whole I-EEZ and within the Galapagos Marine Reserve, but there were more tuna purse seines outside the Galapagos Marine Reserve. Increasing trends over the course of years should be interpreted with caution as there was also an increase in fishing vessels observed in the area over time, which could be a real increase in vessels or an increase in vessels using AIS systems. Seasonally, we observed higher fishing effort later in the year, with a peak in October. 
+
+The Hermandad Reserve was officially declared on January 14th (need to check), 2022. Almost all of the fishing within the Hermandad Reserve prior to its implementation was drifting longlines or tuna purse seines. In 2021, only 8% of the fishing within the I-EEZ was within the Hermandad Reserve area. There was a `r round(100*(1-282/2398))`% decrease in fishing effort within the Hermandad protected area after its implementation at the start of 2022. This effort doesn't appear to have shifted elsewhere as total fishing effort in the Ecuadorian Insular Exclusive Economic Zone (I-EEZ) in 2022 was less than in 2021. In addition, any remaining fishing effort in 2022 was by ECU vessels as opposed to foreign boats. From 2020 to 2021, there was a 75% (need to enter exact number) fishing effort in the region of the future Hermandad Reserve compared to only a 37% increase in the rest of the I-EEZ. Thus, it is possible that fishing effort increased in the area as it was being proposed. 
+
+
+
+## Preliminary findings
+
+- `r length(table(combined$Flag))` countries had fishing vessels within the Ecuadorian Insular Exclusive Economic Zone (I-EEZ)
+- There were `r length(table(combined$Vessel.ID))` unique vessels identified as fishing between 2019 and 2022
+- Between 2019 and 2022, there were `r round(sum(combined$Apparent.Fishing.Hours))` hours of fishing within the Ecuadorian Insular Exclusive Economic Zone (I-EEZ) (Fig. \ref{fig:eez_by_flag_Gear.Type}). Approximately, `r  round(100*sum(gal_MR$Apparent.Fishing.Hours)/sum(combined$Apparent.Fishing.Hours))`% of these fishing hours were within the Galapagos Marine Reserve. 
+- There was a `r round(100*(1-282/2398))`% decrease in fishing effort within the Hermandad protected area after its implementation at the start of 2022. This effort doesn't appear to have shifted elsewhere as total fishing effort in the Ecuadorian Insular Exclusive Economic Zone (I-EEZ) in 2022 was less than in 2021. In addition, any remaining fishing effort in 2022 was by ECU vessels as opposed to foreign boats.
+
+
+
+
+
+
+
+\pagebreak
+
+
+
+
+
+\clearpage
+
+
+
+# Discussion calculations
+
+```{r}
+combined <- read.csv(file = 'gfw_etp_data/ecuador_galapagos_vessel_id_large_vessels.csv',header=TRUE)
+gal_MR <- read.csv(file = 'gfw_etp_data/gmr_vessel_id_large_vessels.csv',header=TRUE)
+options(scipen=999)
+```
+
+
+
+
+
+
+
+
+\pagebreak
+
+# Supplementary Material
+
+\begin{center}
+\textbf{\Large Supplemental material for: \\ Industrial fishing compliance with a new marine corridor near the Galapagos Islands}
+
+$\text{*}$ Corresponding author: Easton R. White (Easton.White@unh.edu)
+
+\end{center}
+
+\vspace{3 mm}
+
+\renewcommand{\thepage}{S\arabic{page}} 
+\renewcommand{\thesection}{S\arabic{section}}  
+\renewcommand{\thetable}{S\arabic{table}}  
+\renewcommand{\thefigure}{S\arabic{figure}}
+\setcounter{table}{0}
+\setcounter{figure}{0}
+\setcounter{section}{0}
+\setcounter{page}{0}
+
+\pagebreak
+
+## Ecuadorian Insular Exclusive Economic Zone (I-EEZ)
+
+```{r,fig.cap='Total fishing effort (hours) in the Ecuadorian Insular Exclusive Economic Zone (I-EEZ) with a loess smoothing curve fit to the data.'}
+combined <- read.csv(file = 'gfw_etp_data/ecuador_galapagos_vessel_id_large_vessels.csv',header=TRUE)
+
+require(tidyverse)
+combined_by_year <- combined %>%
+  mutate(flag = fct_collapse(Flag, ECU='ECU', other_level = 'Foreign')) %>%
+  mutate(Time.Range = as.Date(Time.Range)) %>%
+  group_by(Time.Range,flag) %>%
+  summarize(total_fishing =sum(Apparent.Fishing.Hours))
+
+require(ggplot2)
+ggplot(data=combined_by_year %>% filter(!is.na(flag)),aes(x=Time.Range, y=total_fishing)) + geom_line(color='grey') + geom_smooth() +
+  facet_wrap(~flag, scales = 'free') + 
+  labs(color='Year') + ylab('Total fishing (hours)') +
+  scale_color_viridis(discrete = T,begin = 0.2,end=0.8) + theme_cdf()
+```
+
+
+```{r}
+
+combined_by_year <- combined %>%
+    tidyr::separate(Time.Range,c('Year','Month','Day'),sep="-", convert = TRUE) %>%
+  group_by(Year) %>%
+  summarize(Apparent.Fishing.Hours = sum(Apparent.Fishing.Hours))
+
+kable(combined_by_year,caption = 'Total fishing hours in the Ecuadorian Insular Exclusive Economic Zone (I-EEZ) by year.')
+```
+
+```{r,fig.cap='Total fishing effort (hours) in the Ecuadorian Insular Exclusive Economic Zone (I-EEZ) for different gear types'}
+combined <- read.csv(file = 'gfw_etp_data/ecuador_galapagos_vessel_id_large_vessels.csv',header=TRUE)
+
+require(tidyverse)
+combined_by_year <- combined %>%
+  mutate(flag = fct_collapse(Flag, ECU='ECU', other_level = 'Foreign')) %>%
+  mutate(Time.Range = as.Date(paste(Time.Range,'-1',sep=''))) %>%
+  group_by(Time.Range,Gear.Type) %>%
+  summarize(total_fishing =sum(Apparent.Fishing.Hours))
+
+require(ggplot2)
+ggplot(data=combined_by_year,aes(x=Time.Range, y=total_fishing, color=Gear.Type)) + geom_line()   + ylab('Total fishing hours') +
+  scale_color_viridis(discrete = T,begin = 0.2,end=0.8)+ theme_cdf()
+```
+
+```{r,fig.cap='Total number of vessels over time.'}
+vessels <- read.csv(file = 'gfw_etp_data/ecuador_galapagos_vessel_id_large_vessels.csv',header=T)
+
+require(tidyverse)
+combined_by_year <- vessels %>%
+    mutate(Flag = fct_collapse(Flag, ECU='ECU', other_level = 'Foreign')) %>%
+  mutate(Time.Range = as.Date(paste(Time.Range,'-1',sep=''))) %>%
+  group_by(Time.Range, Flag) %>%
+  summarize(`Number of fishing vessels` = length(table(MMSI)))
+
+require(ggplot2)
+ggplot(data=combined_by_year,aes(x=Time.Range, y=`Number of fishing vessels`, color=Flag)) + geom_line() +
+  scale_color_viridis(discrete = T,begin = 0.2,end=0.8)+ theme_cdf()
+
+```
+
+```{r,eval=F,fig.cap='Total fishing effort in the Ecuadorian Insular Exclusive Economic Zone (I-EEZ) over time'}
+
+combined <- read.csv(file = 'gfw_etp_data/ecuador_galapagos_vessel_id_large_vessels.csv',header=TRUE)
+
+combined <- combined %>%
+  tidyr::separate(Time.Range,c('Year','Month','Day'),sep="-", convert = TRUE) %>%
+  group_by(Lat,Lon,Year) %>%
+  summarize(Apparent.Fishing.Hours = sum(Apparent.Fishing.Hours))
+
+library(ggmap)
+# myMap <- get_stamenmap(bbox = c(left = min(combined$Lon),
+#                                 bottom = min(combined$Lat),
+#                                 right = max(combined$Lon),
+#                                 top = max(combined$Lat)),
+#                        maptype = "terrain", 
+#                        crop = FALSE,
+#                        zoom = 6)
+
+# create a map with a point location for boulder.
+ggplot() + labs(x = "", y = "") + coord_cartesian() + coord_fixed() + 
+     stat_summary_2d(data = combined, aes(x = Lon, y = Lat, 
+        z = Apparent.Fishing.Hours), fun = sum, alpha = 1,bins = 25) +
+  scale_fill_viridis(name = 'Fishing hours') + facet_wrap(~Year) + theme_cdf()
+  
+
+```
+
+```{r,fig.cap='Total fishing effort by gear type in the Ecuadorian Insular Exclusive Economic Zone (I-EEZ) over time\\label{fig:eez_year_and_gear}', fig.height=10, fig.width=7,eval=T}
+
+combined <- read.csv(file = 'gfw_etp_data/ecuador_galapagos_vessel_id_large_vessels.csv',header=TRUE)
+
+combined <- combined %>%
+  tidyr::separate(Time.Range,c('Year','Month','Day'),sep="-", convert = TRUE) %>%
+  group_by(Lat,Lon,Year, Gear.Type) %>%
+  summarize(Apparent.Fishing.Hours = sum(Apparent.Fishing.Hours))
+
+gal <- ggplot() + labs(x = "", y = "") + coord_cartesian() + coord_fixed() + 
+  stat_summary_2d(data = combined, aes(x = Lon, y = Lat, 
+                                       z = Apparent.Fishing.Hours), fun = sum, alpha = 1,bins = 25) +
+  scale_fill_viridis(name = 'Fishing hours') 
+
+
+
+# Add shapefile
+
+library(sf)
+shpData <- st_read(dsn="shp/GMR.shp",quiet = TRUE)
+#proj4string(shpData) # describes data’s current coordinate reference system
+# to change to correct projection:
+shpData <- st_transform(shpData,
+                       st_crs("+proj=longlat +datum=WGS84"),quiet = TRUE)
+
+shpData2 <- st_read(dsn="shp/HMR_notake.shp",quiet = TRUE)
+shpData2 <- st_transform(shpData2,
+                         st_crs("+proj=longlat +datum=WGS84"),quiet = TRUE)
+
+shpData3 <- st_read(dsn="shp/HMR_nolongline.shp",quiet = TRUE)
+shpData3 <- st_transform(shpData3,
+                         st_crs("+proj=longlat +datum=WGS84"),quiet = TRUE)
+
+shpData4 <- st_read(dsn="shp/ZEE_GALAPAGOS.shp",quiet = TRUE)
+shpData4 <- st_transform(shpData4,
+                         st_crs("+proj=longlat +datum=WGS84"),quiet = TRUE)
+
+
+#facet_grid(Gear.Type~Year)
+gal+facet_grid(Gear.Type~Year)+theme_cdf()+
+  geom_sf(data = shpData4, color='black',linewidth=0.3, alpha=0.1) +
+  geom_sf(data = shpData2, color =rgb(255,0,0,255, maxColorValue = 365),fill=alpha(rgb(255,0,0,255,maxColorValue = 365),0.2), linewidth=0.5) +
+  geom_sf(data = shpData3, color=rgb(255,0,0,255, maxColorValue = 365), fill = alpha(rgb(255,235,190,255,maxColorValue = 365),0.2),linewidth=0.5) +
+  geom_sf(data = shpData,linewidth=0.3, alpha=0.1) +
+  theme(legend.position = 'top') + theme(axis.text=element_text(size=6)) 
+
+
+```
+
+\clearpage
+
+## Galapagos Marine Reserve
+
+```{r,fig.cap='Total fishing effort (hours) in the Galapagos Marine Reserve'}
+combined <- read.csv(file = 'gfw_etp_data/gmr_vessel_id_large_vessels.csv',header=TRUE)
+
+require(tidyverse)
+combined_by_year <- combined %>%
+  mutate(flag = fct_collapse(Flag, ECU='ECU', other_level = 'Foreign')) %>%
+  mutate(Time.Range = as.Date(paste(Time.Range,'-1',sep=''))) %>%
+  group_by(Time.Range,flag) %>%
+  summarize(total_fishing =sum(Apparent.Fishing.Hours))
+
+require(ggplot2)
+ggplot(data=combined_by_year %>% filter(!is.na(flag)),aes(x=Time.Range, y=total_fishing)) + geom_line() + 
+  facet_wrap(~flag, scales = 'free') + 
+  labs(color='Year') + ylab('Total fishing hours') +
+  scale_color_viridis(discrete = T,begin = 0.2,end=0.8)+ theme_cdf()
+```
+
+```{r,fig.cap='Total fishing effort (hours) in the Galapagos Marine Reserve for different gear types'}
+combined <- read.csv(file = 'gfw_etp_data/gmr_vessel_id_large_vessels.csv',header=TRUE)
+
+require(tidyverse)
+combined_by_year <- combined %>%
+  mutate(flag = fct_collapse(Flag, ECU='ECU', other_level = 'Foreign')) %>%
+  mutate(Time.Range = as.Date(paste(Time.Range,'-1',sep=''))) %>%
+  group_by(Time.Range,Gear.Type) %>%
+  summarize(total_fishing =sum(Apparent.Fishing.Hours))
+
+require(ggplot2)
+ggplot(data=combined_by_year,aes(x=Time.Range, y=total_fishing, color=Gear.Type, lty=Gear.Type)) + geom_line()  + ylab('Total fishing hours') +
+  scale_color_viridis(discrete = T,begin = 0.2,end=0.8)+ theme_cdf()
+
+fishing_by_Gear.Type <- combined_by_year %>%
+  mutate(Year = format(Time.Range, "%Y")) %>%
+  group_by(Year, Gear.Type) %>%
+  summarize(total_fishing = sum(total_fishing))
+```
+
+
+
+```{r,fig.cap='Total fishing effort (hours) in the Galapagos Marine Reserve over time',eval=T}
+
+combined <- read.csv(file = 'gfw_etp_data/gmr_vessel_id_large_vessels.csv',header=TRUE)
+
+#  geom_polygon(data = boundaries, aes(x = Lon, y = Lat), alpha=0.2) + 
+
+combined <- combined %>%
+  tidyr::separate(Time.Range,c('Year','Month','Day'),sep="-", convert = TRUE) %>%
+  group_by(Lat,Lon,Year) %>%
+  summarize(Apparent.Fishing.Hours = sum(Apparent.Fishing.Hours))
+
+
+gal <- ggplot() + labs(x = "", y = "") + coord_cartesian() + coord_fixed() + 
+  stat_summary_2d(data = combined, aes(x = Lon, y = Lat, 
+                                       z = Apparent.Fishing.Hours), fun = sum, alpha = 1,bins = 25) +
+  scale_fill_viridis(name = 'Fishing hours') 
+
+
+
+# Add shapefile
+
+library(sf)
+shpData <- st_read(dsn="shp/GMR.shp",quiet = TRUE)
+#proj4string(shpData) # describes data’s current coordinate reference system
+# to change to correct projection:
+shpData <- st_transform(shpData,
+                       st_crs("+proj=longlat +datum=WGS84"),quiet = TRUE)
+
+shpData2 <- st_read(dsn="shp/HMR_notake.shp",quiet = TRUE)
+shpData2 <- st_transform(shpData2,
+                         st_crs("+proj=longlat +datum=WGS84"),quiet = TRUE)
+
+shpData3 <- st_read(dsn="shp/HMR_nolongline.shp",quiet = TRUE)
+shpData3 <- st_transform(shpData3,
+                         st_crs("+proj=longlat +datum=WGS84"),quiet = TRUE)
+
+shpData4 <- st_read(dsn="shp/ZEE_GALAPAGOS.shp",quiet = TRUE)
+shpData4 <- st_transform(shpData4,
+                         st_crs("+proj=longlat +datum=WGS84"),quiet = TRUE)
+
+
+#facet_grid(Gear.Type~Year)
+gal+facet_wrap(~Year)+theme_cdf()+
+  geom_sf(data = shpData4, color='black',linewidth=0.3, alpha=0.1) +
+  #geom_sf(data = shpData2, color =rgb(255,0,0,255, maxColorValue = 365),fill=alpha(rgb(255,0,0,255,maxColorValue = 365),0.2), linewidth=0.5) +
+  #geom_sf(data = shpData3, color=rgb(255,0,0,255, maxColorValue = 365), fill = alpha(rgb(255,235,190,255,maxColorValue = 365),0.2),linewidth=0.5) +
+  geom_sf(data = shpData,linewidth=0.3, alpha=0.1) +
+  theme(legend.position = 'top') + theme(axis.text=element_text(size=6)) + ylim(-2,2.5) + xlim(-93,-88.5)
+
+```
+
+
+
+
+
+
+
+```{r,fig.cap='Total number of vessels over time', eval=FALSE}
+
+vessels <- read.csv(file = 'gfw_etp_data/ecuador_galapagos_vessel_id_large_vessels.csv',header=TRUE)
+
+require(tidyverse)
+combined_by_year <- vessels %>%
+    mutate(Flag = fct_collapse(Flag, ECU='ECU', other_level = 'Foreign')) %>%
+  mutate(Time.Range = as.Date(paste(Time.Range,'-1',sep=''))) %>%
+  group_by(Time.Range, Flag) %>%
+  summarize(`Number of fishing vessels` = length(table(Vessel.ID)))
+
+require(ggplot2)
+ggplot(data=combined_by_year,aes(x=Time.Range, y=`Number of fishing vessels`, color=Flag)) + geom_line() +
+  scale_color_viridis(discrete = T,begin = 0.2,end=0.8) + theme_cdf()
+
+```
+
+\clearpage
+
+## Hermandad fishing
+
+```{r,fig.cap='Total fishing effort (hours) in the Hermandad Marine Reserve for both Ecuador and foreign vessels'}
+combined <- read.csv(file = 'gfw_etp_data/hermandad_vessel_id_large_vessels.csv',header=TRUE)
+
+require(tidyverse)
+combined_by_year <- combined %>%
+  mutate(flag = fct_collapse(Flag, ECU='ECU', other_level = 'Foreign')) %>%
+  tidyr::separate(Time.Range,c('Year','Month','Day'),sep="-", convert = TRUE) %>%
+  group_by(Year, Month, flag) %>%
+  summarize(total_fishing =sum(Apparent.Fishing.Hours))
+
+require(ggplot2)
+ggplot(data=combined_by_year,aes(x=Month, y=total_fishing, color=as.factor(Year), group=as.factor(Year))) + geom_line() + 
+  facet_wrap(~flag, scales = 'free') + 
+  labs(color='Year') + ylab('Total fishing hours') +
+  scale_color_viridis(discrete = T,begin = 0.2,end=0.8)+ theme_cdf()
+```
+
+
+
+```{r,fig.cap='Total number of vessels over time'}
+vessels <- read.csv(file = 'gfw_etp_data/hermandad_vessel_id_large_vessels.csv',header=T)
+
+require(tidyverse)
+combined_by_year <- vessels %>%
+    mutate(Flag = fct_collapse(Flag, ECU='ECU', other_level = 'Foreign')) %>%
+  mutate(Time.Range = str_sub(Time.Range,end=-4)) %>%
+  mutate(Time.Range = as.Date(paste(Time.Range,'-1',sep=''))) %>%
+  group_by(Time.Range, Flag) %>%
+  summarize(`Number of fishing vessels` = length(table(Vessel.ID)))
+
+require(ggplot2)
+ggplot(data=combined_by_year,aes(x=Time.Range, y=`Number of fishing vessels`, color=Flag)) + geom_line() +
+  scale_color_viridis(discrete = T,begin = 0.2,end=0.8) + theme_cdf()
+
+```
+
+\clearpage
+
+
+
+
+```{r}
+combined <- read.csv(file = 'gfw_etp_data/hermandad_vessel_id_large_vessels.csv',header=TRUE)
+
+combined <- combined %>%
+  tidyr::separate(Time.Range,c('Year','Month','Day'),sep="-", convert = TRUE) %>%
+  group_by(Lat,Lon,Year) %>%
+  summarize(Apparent.Fishing.Hours = sum(Apparent.Fishing.Hours))
+
+combined_by_year <- combined %>%
+  group_by(Year) %>%
+  summarize(Apparent.Fishing.Hours = sum(Apparent.Fishing.Hours))
+
+kable(combined_by_year,caption = 'Total fishing hours in the Hermandad Marine Reserve by year. The reserve was officially declared at the start of 2022',digits=0)
+```
+
+
+
+
+
+```{r}
+combined <- read.csv(file = 'gfw_etp_data/hermandad_vessel_id_large_vessels.csv',header=TRUE)
+
+combined <- combined %>%
+    mutate(Flag = fct_collapse(Flag, ECU='ECU', other_level = 'Foreign')) %>%
+  tidyr::separate(Time.Range,c('Year','Month','Day'),sep="-", convert = TRUE) %>%
+  group_by(Year, Flag) %>%
+  summarize(Apparent.Fishing.Hours = sum(Apparent.Fishing.Hours))
+
+combined_by_year <- combined %>%
+  group_by(Year, Flag) %>%
+  summarize(Apparent.Fishing.Hours = sum(Apparent.Fishing.Hours))
+
+kable(combined_by_year,caption = 'Total fishing hours in the Hermandad Marine Reserve by vessel flag. The reserve was officially declared at the start of 2022',digits = 0)
+```
+
+
+
+```{r}
+hermandad <- read.csv(file = 'gfw_etp_data/hermandad_vessel_id_large_vessels.csv',header=TRUE)
+
+hermandad <- hermandad%>%
+  #mutate(flag = fct_collapse(Flag, ECU='ECU', other_level = 'Foreign')) %>%
+  tidyr::separate(Time.Range,c('Year','Month','Day'),sep="-", convert = TRUE) %>%
+  group_by(Year, Gear.Type) %>%
+  summarize(Apparent.Fishing.Hours =sum(Apparent.Fishing.Hours))
+
+kable(hermandad,caption = 'Total fishing hours in the Hermandad Marine Reserve by gear type. The reserve was officially declared at the start of 2022',digits = 0)
+```
+
+
+
+
+
+```{r, eval=F, fig.cap='Locations (transparent circles) of AIS disabling events for different gear types overlaid on map of total fishing effort within the exclusive economic zone',eval=T, fig.width = 8}
+
+
+# Load AIS data
+ais <- read.csv(file='ais_disabling_events.csv', header=T)
+
+# ais statistics to use elsewhere. Need to cut out points to only the area defined here
+
+ais <- ais %>%
+  filter(gap_start_lat>-6,gap_start_lat<6,gap_start_lon> -97,gap_start_lon< -84) %>%
+  mutate(vessel_class = fct_recode(vessel_class, 'drifting longlines' = 'drifting_longlines', "purse seines" = 'tuna_purse_seines', 'squid jigger' = 'squid_jigger' )) %>%
+  filter(gap_start_distance_from_shore_m<750000) %>%
+  filter(vessel_class !='other') %>%
+  mutate(year = as.numeric(format(as.Date(gap_start_timestamp),'%Y'))) %>%
+  filter(year == 2019)
+
+ais_by_flag <- ais %>%
+  mutate(flag = fct_lump(flag,5)) %>%
+  group_by(flag) %>%
+  summarize(total_events = n()) %>%
+  arrange(desc(total_events))
+
+ais_by_gear <- ais %>%
+  group_by(vessel_class) %>%
+  summarize(total_events = n()) %>%
+  arrange(desc(total_events))
+
+ais_by_flag_and_gear <- ais %>%
+  mutate(flag = fct_lump(flag,5)) %>%
+  group_by(flag,vessel_class) %>%
+  summarize(total_events = n()) %>%
+  arrange(desc(total_events))
+
+ais_by_flag_and_mmsi <- ais %>%
+  mutate(flag = fct_lump(flag,5)) %>%
+  group_by(flag) %>%
+  summarize(total_events = length(unique(mmsi))) %>%
+  arrange(desc(total_events))
+
+
+
+
+combined <- read.csv(file = 'gfw_etp_data/ecuador_galapagos_vessel_id_large_vessels.csv',header=TRUE)
+
+combined <- combined %>%
+  tidyr::separate(Time.Range,c('Year','Month','Day'),sep="-", convert = TRUE) %>%
+  filter(Year ==2019) %>%
+  group_by(Lat,Lon,Year, Gear.Type) %>%
+  summarize(Apparent.Fishing.Hours = sum(Apparent.Fishing.Hours))
+
+
+library(ggmap)
+myMap <- get_stamenmap(bbox = c(left = min(combined$Lon),
+                                bottom = min(combined$Lat),
+                                right = max(combined$Lon),
+                                top = max(combined$Lat)),
+                       maptype = "terrain",
+                       crop = FALSE,
+                       zoom = 4)
+
+
+# create a map with a point location for boulder.
+g<-ggplot() + labs(x = "", y = "")  + 
+  stat_summary_2d(data = combined, aes(x = Lon, y = Lat, 
+                                       z = Apparent.Fishing.Hours), fun = sum, alpha = 0.5,bins = 100) + scale_fill_viridis(name = 'Fishing intensity') 
+
+
+
+# create a map with a point location for boulder.
+gal <- ggplot() + labs(x = "", y = "")  + 
+  stat_summary_2d(data = combined, aes(x = Lon, y = Lat, 
+                                       z = Apparent.Fishing.Hours/max(ggplot_build(g)$data[[1]]$value)), fun = sum, alpha = 0.5,bins = 30) +
+  scale_fill_viridis(name = 'Fishing intensity') +
+  geom_point(data=ais, aes(x=gap_start_lon, y = gap_start_lat), shape=16,alpha=0.75) + 
+  #geom_point(data=ais, aes(x=gap_end_lon, y = gap_end_lat),shape=17,col=2, alpha=0.5) + 
+  #geom_segment(data=ais %>% filter(gap_hours>0), aes(x=gap_start_lon, y = gap_start_lat, xend=gap_end_lon, yend = gap_end_lat)) + 
+  facet_wrap(~vessel_class) + 
+  coord_cartesian()  +   coord_fixed(ylim=c(min(combined$Lat)*1.5,max(combined$Lat)*1.5), xlim=c(-98,-84))
+
+
+library(sf)
+shpData <- st_read(dsn="shp/GMR.shp",quiet = TRUE)
+#proj4string(shpData) # describes data’s current coordinate reference system
+# to change to correct projection:
+shpData <- st_transform(shpData,
+                        st_crs("+proj=longlat +datum=WGS84"))
+
+shpData2 <- st_read(dsn="shp/HMR_notake.shp",quiet = TRUE)
+shpData2 <- st_transform(shpData2,
+                         st_crs("+proj=longlat +datum=WGS84"))
+
+shpData3 <- st_read(dsn="shp/HMR_nolongline.shp",quiet = TRUE)
+shpData3 <- st_transform(shpData3,
+                         st_crs("+proj=longlat +datum=WGS84"))
+
+shpData4 <- st_read(dsn="shp/ZEE_GALAPAGOS.shp",quiet = TRUE)
+shpData4 <- st_transform(shpData4,
+                         st_crs("+proj=longlat +datum=WGS84"))
+
+
+#facet_grid(Gear.Type~Year)
+gal+theme_cdf()+geom_sf(data = shpData,size = .2, alpha=0.3) +
+  geom_sf(data = shpData2, color ="black",fill='darkgrey',size = .2,alpha=0.5) +
+  geom_sf(data = shpData3, color='black', fill ="lightgrey",size = .2, alpha=0.5) +
+  geom_sf(data = shpData4, color='black',fill ="grey",size = .2, alpha=0.2) +
+  theme(legend.position = 'top')+ theme(axis.text=element_text(size=6))
+
+
+
+
+```
+
+
+
+
+
+```{r, echo=F}
+# Create .bib file of the R packages I use in the paper
+#knitr::write_bib(c(.packages(), "deSolve"), "packages.bib")
+```
+
+
